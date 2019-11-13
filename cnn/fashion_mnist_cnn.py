@@ -161,9 +161,11 @@ class CNNModel(object):
     
     def update(self, train_imgs, train_labels, update_ratio):
         batch_generator = generator(
-                [train_imgs, train_labels], batch_size=self.training_batchsize)
+                [train_imgs, train_labels], batch_size=self.training_batchsize
+                )
         
         loss = 0
+        accuracy = 0
         step = 0
         while True:
             try:
@@ -172,31 +174,30 @@ class CNNModel(object):
                 fd = {
                     self.imgs: minibatch_imgs[:, :, :, np.newaxis],
                     self.labels: minibatch_targets,
-                    self.moved_lr: self.lr_schedule(update_ratio)}
+                    self.moved_lr: self.lr_schedule(update_ratio)
+                    }
 
-                cur_loss, _ = self.sess.run([self.total_loss, self.train_op],
-                                            feed_dict=fd)
-                loss += cur_loss
+                batch_loss, preds, _ = self.sess.run(
+                        [self.total_loss, self.preds, self.train_op],
+                        feed_dict=fd
+                        )
+                batch_accuracy = np.mean(preds == minibatch_targets)
+
                 global_step = self.sess.run(tf.train.get_global_step())
                 self.sw.add_scalar(
-                    'loss',
-                    cur_loss,
+                    'accuracy',
+                    batch_accuracy,
                     global_step=global_step)
+                self.sw.add_scalar(
+                    'loss',
+                    batch_loss,
+                    global_step=global_step)
+                loss += batch_loss
+                accuracy += batch_accuracy
             except StopIteration:
                 del batch_generator
                 break
-        return loss / step
-    
-    def loss(self, imgs, labels):
-        imgs = np.asarray(imgs)
-        if imgs.ndim == 3:
-            imgs = imgs[:, :, :, np.newaxis]
-        elif imgs.ndim == 2:
-            imgs = imgs[np.newaxis, :, :, np.newaxis]
-        total_loss = self.sess.run(self.total_loss,
-                                   feed_dict={self.imgs: imgs,
-                                              self.labels: labels})
-        return total_loss
+        return loss / step, accuracy / step
     
     def predict(self, imgs):
         imgs = np.asarray(imgs)
@@ -218,11 +219,11 @@ if __name__ == '__main__':
     
     for epoch in tqdm(range(total_updates)):
         epoch += 1
-        loss = cnn.update(train_data.imgs, train_data.labels,
+        loss, accuracy = cnn.update(train_data.imgs, train_data.labels,
                           min(0.9, epoch / total_updates))
-        print(f'\n>>>>Train Loss: {loss}')
+        print(f'\n>>>>Train Loss: {loss}, Accuracy: {accuracy}')
         if epoch % save_model_freq == 0:
             cnn.save_model()
             accuracy = np.mean(cnn.predict(test_data.imgs) == test_data.labels)
-            print(f'Test accuracy: {accuracy}')
+            print(f'\nTest accuracy: {accuracy}')
 
