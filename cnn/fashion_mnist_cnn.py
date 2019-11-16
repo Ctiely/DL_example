@@ -224,7 +224,7 @@ if __name__ == '__main__':
         selected.extend(random.sample(groups[group], num_class))
     
     imgs = train_data.imgs[selected]
-    labels = train_data.imgs[selected]
+    labels = train_data.labels[selected]
     
     total_updates = 1000
     save_model_freq = 20
