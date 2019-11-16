@@ -5,6 +5,7 @@ import math
 import pandas as pd
 # import re
 
+from collections import defaultdict
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 # from bs4 import BeautifulSoup
@@ -194,19 +195,33 @@ if __name__ == '__main__':
     total_datas.to_csv('data/movies.csv', index=False)
     '''
     total_datas = pd.read_csv("data/movies.csv", header=0)
-
-    total_words = set()
+    
+    words_list = total_datas['review'].apply(lambda x: x.split())
+    words_freq = defaultdict(int)
     for i in range(len(total_datas)):
-        total_words |= set(total_datas['review'][i].split())
+        for word in words_list[i]:
+            words_freq[word] += 1
+    
+    datas = []
+    for i in range(len(total_datas)):
+        data = []
+        for word in words_list[i]:
+            if words_freq[word] >= 10:
+                data.append(word)
+        datas.append(data)
+    total_datas['review'] = datas
+    
+    total_words = set()
+    for i in range(len(datas)):
+        total_words |= set(datas[i])
     vocab_size = len(total_words)
     words_idx = dict(zip(total_words, range(len(total_words))))
     idx_words = dict(zip(range(len(total_words)), total_words))
     
-    train_ratio = 0.7
-    
     positive_indexs = np.where(total_datas['target'].values == 1)[0]
     negative_indexs = np.where(total_datas['target'].values == 0)[0]
     
+    train_ratio = 0.7
     np.random.seed(0)
     selected = np.random.choice(positive_indexs,
                                 size=int(train_ratio * len(total_datas) / 2),
@@ -220,10 +235,10 @@ if __name__ == '__main__':
     train_data = total_datas[indexs]
     test_data = total_datas[~indexs]
     
-    dataset = train_data['review'].apply(lambda x: x.split()).tolist()
+    dataset = train_data['review'].tolist()
     data_lengths = np.array(list(map(len, dataset)))
     
-    test_dataset = test_data['review'].apply(lambda x: x.split()).tolist()
+    test_dataset = test_data['review'].tolist()
     test_data_lengths = np.array(list(map(len, test_dataset)))
     batch_test_datas = generator(
         test_dataset, test_data['target'].values, test_data_lengths, 64, words_idx
