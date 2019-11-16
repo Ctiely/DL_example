@@ -205,26 +205,14 @@ class CNNModel(object):
             imgs = imgs[:, :, :, np.newaxis]
         elif imgs.ndim == 2:
             imgs = imgs[np.newaxis, :, :, np.newaxis]
+        
         preds = self.sess.run(self.preds, feed_dict={self.imgs: imgs})
         return preds
 
     
 if __name__ == '__main__':
-    num_class = 2000
     train_data = DataSet('data/train.txt')
     test_data = DataSet('data/test.txt')
-    
-    groups = defaultdict(list)
-    for i in range(len(train_data)):
-        groups[train_data.labels[i]].append(i)
-    
-    random.seed(0)
-    selected = []
-    for group in groups:
-        selected.extend(random.sample(groups[group], num_class))
-    
-    imgs = train_data.imgs[selected]
-    labels = train_data.labels[selected]
     
     total_updates = 1000
     save_model_freq = 20
@@ -234,10 +222,16 @@ if __name__ == '__main__':
     epoch = 0
     while True:
         epoch += 1
-        loss, accuracy = cnn.update(imgs, labels, min(0.9, epoch / total_updates))
+        loss, accuracy = cnn.update(train_data.imgs, train_data.labels,
+                                    min(0.9, epoch / total_updates))
         print(f'>>>>Traine poch: {epoch}, Loss: {loss}, Accuracy: {accuracy}')
         if epoch % save_model_freq == 0:
             cnn.save_model()
-            accuracy = np.mean(cnn.predict(test_data.imgs) == test_data.labels)
-            print(f'Test accuracy: {accuracy}')
+            batch_test_datas = generator(
+                [test_data.imgs, test_data.labels], batch_size=64
+                )
+            accuracy = 0
+            for imgs, labels in batch_test_datas:
+                accuracy += np.sum(cnn.predict(imgs) == labels)
+            print(f'Test accuracy: {accuracy / len(test_data)}')
 
