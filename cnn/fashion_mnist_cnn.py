@@ -11,10 +11,12 @@ def generator(data_batch, batch_size):
     n_sample = data_batch[0].shape[0]
     index = np.arange(n_sample)
     np.random.shuffle(index)
+    batch_datas = []
     for i in range(math.ceil(n_sample / batch_size)):
         span_index = slice(i * batch_size, min((i + 1) * batch_size, n_sample))
         span_index = index[span_index]
-        yield [x[span_index, :] if x.ndim > 1 else x[span_index] for x in data_batch]
+        batch_datas.append([x[span_index, :] if x.ndim > 1 else x[span_index] for x in data_batch])
+    return batch_datas
 
 
 class DataSet(object):
@@ -160,43 +162,38 @@ class CNNModel(object):
             print("## New start!")
     
     def update(self, train_imgs, train_labels, update_ratio):
-        batch_generator = generator(
+        batch_datas = generator(
                 [train_imgs, train_labels], batch_size=self.training_batchsize
                 )
         
         loss = 0
         accuracy = 0
         step = 0
-        while True:
-            try:
-                step += 1
-                minibatch_imgs, minibatch_targets = next(batch_generator)
-                fd = {
-                    self.imgs: minibatch_imgs[:, :, :, np.newaxis],
-                    self.labels: minibatch_targets,
-                    self.moved_lr: self.lr_schedule(update_ratio)
-                    }
+        for minibatch_imgs, minibatch_targets in tqdm(batch_datas):
+            step += 1
+            fd = {
+                self.imgs: minibatch_imgs[:, :, :, np.newaxis],
+                self.labels: minibatch_targets,
+                self.moved_lr: self.lr_schedule(update_ratio)
+                }
 
-                batch_loss, preds, _ = self.sess.run(
-                        [self.total_loss, self.preds, self.train_op],
-                        feed_dict=fd
-                        )
-                batch_accuracy = np.mean(preds == minibatch_targets)
+            batch_loss, preds, _ = self.sess.run(
+                [self.total_loss, self.preds, self.train_op],
+                feed_dict=fd
+                )
+            batch_accuracy = np.mean(preds == minibatch_targets)
 
-                global_step = self.sess.run(tf.train.get_global_step())
-                self.sw.add_scalar(
-                    'accuracy',
-                    batch_accuracy,
-                    global_step=global_step)
-                self.sw.add_scalar(
-                    'loss',
-                    batch_loss,
-                    global_step=global_step)
-                loss += batch_loss
-                accuracy += batch_accuracy
-            except StopIteration:
-                del batch_generator
-                break
+            global_step = self.sess.run(tf.train.get_global_step())
+            self.sw.add_scalar(
+                'accuracy',
+                batch_accuracy,
+                global_step=global_step)
+            self.sw.add_scalar(
+                'loss',
+                batch_loss,
+                global_step=global_step)
+            loss += batch_loss
+            accuracy += batch_accuracy
         return loss / step, accuracy / step
     
     def predict(self, imgs):
@@ -217,7 +214,7 @@ if __name__ == '__main__':
     
     cnn = CNNModel((28, 28, 1), 10)
     
-    for epoch in tqdm(range(total_updates)):
+    for epoch in range(total_updates):
         epoch += 1
         loss, accuracy = cnn.update(train_data.imgs, train_data.labels,
                           min(0.9, epoch / total_updates))

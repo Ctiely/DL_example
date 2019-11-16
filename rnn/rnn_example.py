@@ -11,6 +11,7 @@ def generator(dataset, data_lengths, batch_size, words_idx):
     n_sample = len(dataset)
     indexs = np.arange(n_sample)
     np.random.shuffle(indexs)
+    batch_datas = []
     for i in range(math.ceil(n_sample / batch_size)):
         span_index = slice(i * batch_size, min((i + 1) * batch_size, n_sample))
         span_index = indexs[span_index]
@@ -23,7 +24,8 @@ def generator(dataset, data_lengths, batch_size, words_idx):
             embedding = np.array([words_idx[c] for c in cur_data])
             batch_words[i, : length] = embedding
             batch_targets[i, : length - 1], batch_targets[i, length - 1] = embedding[1:], len(words_idx) - 1
-        yield (batch_words, batch_targets, batch_lengths)
+        batch_datas.append((batch_words, batch_targets, batch_lengths))
+    return batch_datas
 
 
 def pick_top_n(preds, vocab_size, top_n=5):
@@ -137,35 +139,31 @@ class RNNModel(object):
             print("## New start!")
     
     def update(self, dataset, data_lengths, words_idx, update_ratio):
-        batch_generator = generator(
+        batch_datas = generator(
                 dataset, data_lengths, self.training_batchsize, words_idx
                 )
         loss = 0
         step = 0
-        while True:
-            try:
-                step += 1
-                mini_words, mini_targets, mini_lengths = next(batch_generator)
-                fd = {
-                    self.input_words: mini_words,
-                    self.targets: mini_targets,
-                    self.lengths: mini_lengths,
-                    self.keep_prob_hd: self.keep_prob,
-                    self.moved_lr: self.lr_schedule(update_ratio)}
+        for mini_words, mini_targets, mini_lengths in tqdm(batch_datas):
+            step += 1
+            fd = {
+                self.input_words: mini_words,
+                self.targets: mini_targets,
+                self.lengths: mini_lengths,
+                self.keep_prob_hd: self.keep_prob,
+                self.moved_lr: self.lr_schedule(update_ratio)
+                }
 
-                cur_loss, _ = self.sess.run(
-                        [self.total_loss, self.train_op],
-                        feed_dict=fd
-                        )
-                loss += cur_loss
-                global_step = self.sess.run(tf.train.get_global_step())
-                self.sw.add_scalar(
-                    'loss',
-                    cur_loss,
-                    global_step=global_step)
-            except StopIteration:
-                del batch_generator
-                break
+            cur_loss, _ = self.sess.run(
+                [self.total_loss, self.train_op],
+                feed_dict=fd
+                )
+            loss += cur_loss
+            global_step = self.sess.run(tf.train.get_global_step())
+            self.sw.add_scalar(
+                'loss',
+                cur_loss,
+                global_step=global_step)
         return loss / step
     
     def sample(self, n_samples, prime, idx_words):
@@ -226,7 +224,7 @@ if __name__ == "__main__":
     
     rnn = RNNModel(vocab_size, hidden_size)
     
-    for epoch in tqdm(range(total_updates)):
+    for epoch in range(total_updates):
         epoch += 1
         loss = rnn.update(dataset, data_lengths, words_idx,
                           min(0.9, epoch / total_updates))
