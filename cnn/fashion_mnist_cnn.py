@@ -235,9 +235,9 @@ if __name__ == '__main__':
     while True:
         epoch += 1
         loss, accuracy = cnn.update(imgs, labels, min(0.9, epoch / total_updates))
-        print(f'\n>>>>Traine poch: {epoch}, Loss: {loss}, Accuracy: {accuracy}')
+        print(f'>>>>Traine poch: {epoch}, Loss: {loss}, Accuracy: {accuracy}')
         if epoch % save_model_freq == 0:
             cnn.save_model()
             accuracy = np.mean(cnn.predict(test_data.imgs) == test_data.labels)
-            print(f'\nTest accuracy: {accuracy}')
+            print(f'Test accuracy: {accuracy}')
 
