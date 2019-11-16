@@ -206,7 +206,7 @@ if __name__ == '__main__':
     for i in range(len(total_datas)):
         data = []
         for word in words_list[i]:
-            if words_freq[word] >= 10:
+            if words_freq[word] >= 30:
                 data.append(word)
         datas.append(data)
     total_datas['review'] = datas
@@ -245,7 +245,7 @@ if __name__ == '__main__':
         )
     
     total_updates = 1000
-    save_model_freq = 20
+    save_model_freq = 10
     eval_step = 5
     hidden_size = 128
     
