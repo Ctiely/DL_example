@@ -2,13 +2,16 @@ import tensorflow as tf
 import numpy as np
 import os
 import math
-import random
+import pandas as pd
+# import re
 
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
+# from bs4 import BeautifulSoup
+# from nltk.corpus import stopwords
 
 
-def generator(dataset, data_lengths, batch_size, words_idx):
+def generator(dataset, target, data_lengths, batch_size, words_idx):
     n_sample = len(dataset)
     indexs = np.arange(n_sample)
     np.random.shuffle(indexs)
@@ -17,34 +20,25 @@ def generator(dataset, data_lengths, batch_size, words_idx):
         span_index = slice(i * batch_size, min((i + 1) * batch_size, n_sample))
         span_index = indexs[span_index]
         batch_lengths = data_lengths[span_index]
+        batch_target = target[span_index]
         batch_words = np.zeros((len(batch_lengths), batch_lengths.max()), dtype=np.int32)
-        batch_targets = np.zeros((len(batch_lengths), batch_lengths.max()), dtype=np.int32)
         for i, index in enumerate(span_index):
             cur_data = dataset[index]
             length = len(cur_data)
-            embedding = np.array([words_idx[c] for c in cur_data])
-            batch_words[i, : length] = embedding
-            batch_targets[i, : length - 1], batch_targets[i, length - 1] = embedding[1:], len(words_idx) - 1
-        batch_datas.append((batch_words, batch_targets, batch_lengths))
+            batch_words[i, : length] = np.array([words_idx[c] for c in cur_data])
+        batch_datas.append((batch_words, batch_target, batch_lengths))
     return batch_datas
 
 
-def pick_top_n(preds, vocab_size, top_n=5):
-    p = np.squeeze(preds)
-    p[np.argsort(p)[:-top_n]] = 0
-    p = p / np.sum(p)
-    c = np.random.choice(vocab_size, 1, p=p)[0]
-    return c
-
-
 class RNNModel(object):
-    def __init__(self, vocab_size, hidden_size,
+    def __init__(self, num_class, vocab_size, hidden_size,
                  keep_prob=0.5,
                  batch_size=64,
                  max_grad_norm=1.0,
                  embedding_size=100,
                  lr_schedule=lambda x: max(0.05, (1 - x)) * 2.5e-4,
                  save_path="./rnn_example"):
+        self.num_class = num_class
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         
@@ -75,32 +69,31 @@ class RNNModel(object):
                     'embedding', [self.vocab_size, self.embedding_size])
             self.gru_inputs = tf.nn.embedding_lookup(embedding, self.input_words)
         
-        self.mask = tf.sequence_mask(self.lengths, max_length)
         gru = tf.nn.rnn_cell.GRUCell(self.hidden_size)
         dropout = tf.nn.rnn_cell.DropoutWrapper(gru, output_keep_prob=self.keep_prob_hd)
-        self.initial_state = dropout.zero_state(batch_size, tf.float32)
-        self.gru_outputs, self.final_state = tf.nn.dynamic_rnn(
+        initial_state = dropout.zero_state(batch_size, tf.float32)
+        self.gru_outputs, _ = tf.nn.dynamic_rnn(
                 dropout, self.gru_inputs,
-                initial_state=self.initial_state,
+                initial_state=initial_state,
                 sequence_length=self.lengths
                 )
-        
-        mask_outputs = tf.boolean_mask(self.gru_outputs, self.mask)
+        indexs = tf.range(0, batch_size) * max_length + self.lengths - 1
+        outputs = tf.gather(tf.reshape(self.gru_outputs, [-1, self.hidden_size]),
+                            indexs)
         self.outputs = tf.layers.dense(
-                mask_outputs, self.vocab_size,
+                outputs, self.num_class,
                 kernel_initializer=tf.truncated_normal_initializer(0.0, 0.01)
                 )
     
     def _build_algorithm(self):
         self.moved_lr = tf.placeholder(tf.float32)
         self.optimizer = tf.train.AdamOptimizer(self.moved_lr, epsilon=1e-5)
-        self.pred_prob = tf.nn.softmax(self.outputs)
+        self.preds = tf.argmax(self.outputs, axis=1)
         
-        self.targets = tf.placeholder(tf.int32, [None, None], name='targets')
-        mask_targets = tf.boolean_mask(self.targets, self.mask)
+        self.targets = tf.placeholder(tf.int32, name='targets')
         self.total_loss = tf.reduce_mean(
                 tf.nn.sparse_softmax_cross_entropy_with_logits(
-                        labels=mask_targets, logits=self.outputs
+                        labels=self.targets, logits=self.outputs
                         ),
                 axis=0
                 )
@@ -139,11 +132,12 @@ class RNNModel(object):
         else:
             print("## New start!")
     
-    def update(self, dataset, data_lengths, words_idx, update_ratio):
+    def update(self, dataset, target, data_lengths, words_idx, update_ratio):
         batch_datas = generator(
-                dataset, data_lengths, self.training_batchsize, words_idx
+                dataset, target, data_lengths, self.training_batchsize, words_idx
                 )
         loss = 0
+        accuracy = 0
         step = 0
         for mini_words, mini_targets, mini_lengths in tqdm(batch_datas):
             step += 1
@@ -155,91 +149,111 @@ class RNNModel(object):
                 self.moved_lr: self.lr_schedule(update_ratio)
                 }
 
-            cur_loss, _ = self.sess.run(
-                [self.total_loss, self.train_op],
+            batch_loss, preds, _ = self.sess.run(
+                [self.total_loss, self.preds, self.train_op],
                 feed_dict=fd
                 )
-            loss += cur_loss
+            batch_accuracy = np.mean(preds == mini_targets)
+
             global_step = self.sess.run(tf.train.get_global_step())
             self.sw.add_scalar(
-                'loss',
-                cur_loss,
+                'accuracy',
+                batch_accuracy,
                 global_step=global_step)
-        return loss / step
+            self.sw.add_scalar(
+                'loss',
+                batch_loss,
+                global_step=global_step)
+            loss += batch_loss
+            accuracy += batch_accuracy
+        return loss / step, accuracy / step
+
+    def predict(self, batch_data, batch_length):
+        preds = self.sess.run(self.preds,
+                              feed_dict={self.input_words: batch_data,
+                                         self.lengths: batch_length,
+                                         self.keep_prob_hd: 1.0})
+        return preds
+
+
+if __name__ == '__main__':
+    '''
+    datas = pd.read_csv("data/labeledTrainData.tsv", header=0, delimiter="\t", quoting=3)
     
-    def sample(self, n_samples, prime, idx_words):
-        samples = prime[:]
-        state = self.sess.run(self.initial_state,
-                              feed_dict={self.input_words: [[0]]})
-        preds = np.ones((self.vocab_size, ))
-        for c in prime:
-            x = np.zeros((1, 1))
-            x[0, 0] = c
-            fd = {self.input_words: x,
-                  self.lengths: [1],
-                  self.keep_prob_hd: 1.0,
-                  self.initial_state: state}
-            preds, state = self.sess.run([self.pred_prob, self.final_state],
-                                         feed_dict=fd)
-
-        c = pick_top_n(preds, self.vocab_size)
-        samples.append(c)
-
-        for i in range(n_samples):
-            if c == self.vocab_size - 1:
-                break
-            x = np.zeros((1, 1))
-            x[0, 0] = c
-            fd = {self.input_words: x,
-                  self.lengths: [1],
-                  self.keep_prob_hd: 1.0,
-                  self.initial_state: state}
-            preds, state = self.sess.run([self.pred_prob, self.final_state],
-                                         feed_dict=fd)
-
-            c = pick_top_n(preds, self.vocab_size)
-            samples.append(c)
-
-        return ''.join([idx_words[c] for c in samples])
-
-
-if __name__ == "__main__":
-    total_updates = 10000
-    save_model_freq = 30
-    generate_freq = 15
-    hidden_size = 128
+    def review_to_words(raw_review):
+        review_text = BeautifulSoup(raw_review, "lxml").get_text() 
+        letters_only = re.sub("[^a-zA-Z]", " ", review_text) 
+        words = letters_only.lower().split()                             
+        stops = set(stopwords.words("english"))                  
+        meaningful_words = [w for w in words if not w in stops]
+        return ' '.join(meaningful_words)
     
-    with open('data/poetry.txt', 'r') as f:
-        texts = f.readlines()
-    
-    random.seed(0)
-    random.shuffle(texts)
-    texts = texts[: 20000]
-    
+    total_datas = pd.DataFrame()
+    total_datas['review'] = datas['review'].apply(review_to_words)
+    total_datas['target'] = datas['sentiment']
+    total_datas.to_csv('data/movies.csv', index=False)
+    '''
+    total_datas = pd.read_csv("data/movies.csv", header=0)
+
     total_words = set()
-    for text in texts:
-        total_words |= set(text)
-    
-    total_words = list(total_words)
-    total_words.append('#')
+    for i in range(len(total_datas)):
+        total_words |= set(total_datas['review'][i].split())
     vocab_size = len(total_words)
     words_idx = dict(zip(total_words, range(len(total_words))))
     idx_words = dict(zip(range(len(total_words)), total_words))
-    dataset = [text.strip() for text in texts]
+    
+    train_ratio = 0.7
+    
+    positive_indexs = np.where(total_datas['target'].values == 1)[0]
+    negative_indexs = np.where(total_datas['target'].values == 0)[0]
+    
+    np.random.seed(0)
+    selected = np.random.choice(positive_indexs,
+                                size=int(train_ratio * len(total_datas) / 2),
+                                replace=False).tolist() + \
+               np.random.choice(negative_indexs,
+                                size=int(train_ratio * len(total_datas) / 2),
+                                replace=False).tolist()
+    selected.sort()
+    indexs = np.zeros(len(total_datas), dtype=np.bool)
+    indexs[selected] = True
+    train_data = total_datas[indexs]
+    test_data = total_datas[~indexs]
+    
+    dataset = train_data['review'].apply(lambda x: x.split()).tolist()
     data_lengths = np.array(list(map(len, dataset)))
     
-    rnn = RNNModel(vocab_size, hidden_size)
+    test_dataset = test_data['review'].apply(lambda x: x.split()).tolist()
+    test_data_lengths = np.array(list(map(len, test_dataset)))
+    batch_test_datas = generator(
+        test_dataset, test_data['target'].values, test_data_lengths, 64, words_idx
+        )
+    
+    total_updates = 1000
+    save_model_freq = 20
+    eval_step = 5
+    hidden_size = 128
+    
+    rnn = RNNModel(2, vocab_size, hidden_size)
     
     epoch = 0
     while True:
         epoch += 1
-        loss = rnn.update(dataset, data_lengths, words_idx,
-                          min(0.9, epoch / total_updates))
-        print(f'>>>>Train epoch: {epoch}, Loss: {loss}')
+        loss, accuracy = rnn.update(
+                dataset, train_data['target'].values, data_lengths,
+                words_idx, min(0.9, epoch / total_updates)
+                )
+        print(f'>>>>Traine poch: {epoch}, Loss: {loss}, Accuracy: {accuracy}')
         if epoch % save_model_freq == 0:
             rnn.save_model()
         
-        if epoch % generate_freq == 0:
-            for _ in range(5):
-                print(rnn.sample(10, [np.random.randint(vocab_size)], idx_words))
+        if epoch % eval_step == 0:
+            accuracy = 0
+            for batch_data, batch_target, batch_length in tqdm(batch_test_datas):
+                accuracy += np.sum(rnn.predict(batch_data, batch_length) == batch_target)
+            print(f'Test accuracy: {accuracy / len(test_data)}')
+            rnn.sw.add_scalar(
+                    'test_accuracy',
+                    accuracy,
+                    global_step=epoch // eval_step)
 

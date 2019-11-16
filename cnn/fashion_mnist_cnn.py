@@ -3,9 +3,7 @@ import skimage
 import math
 import os
 import numpy as np
-import random
 
-from collections import defaultdict
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 
@@ -213,9 +211,13 @@ class CNNModel(object):
 if __name__ == '__main__':
     train_data = DataSet('data/train.txt')
     test_data = DataSet('data/test.txt')
+    batch_test_datas = generator(
+        [test_data.imgs, test_data.labels], batch_size=64
+        )
     
-    total_updates = 1000
-    save_model_freq = 20
+    total_updates = 100
+    save_model_freq = 10
+    eval_step = 5
     
     cnn = CNNModel((28, 28, 1), 10)
     
@@ -227,11 +229,14 @@ if __name__ == '__main__':
         print(f'>>>>Traine poch: {epoch}, Loss: {loss}, Accuracy: {accuracy}')
         if epoch % save_model_freq == 0:
             cnn.save_model()
-            batch_test_datas = generator(
-                [test_data.imgs, test_data.labels], batch_size=64
-                )
+        
+        if epoch % eval_step == 0:
             accuracy = 0
             for imgs, labels in batch_test_datas:
                 accuracy += np.sum(cnn.predict(imgs) == labels)
             print(f'Test accuracy: {accuracy / len(test_data)}')
+            cnn.sw.add_scalar(
+                'test_accuracy',
+                accuracy,
+                global_step=epoch // eval_step)
 
