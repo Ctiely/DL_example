@@ -228,7 +228,7 @@ if __name__ == "__main__":
         epoch += 1
         loss = rnn.update(dataset, data_lengths, words_idx,
                           min(0.9, epoch / total_updates))
-        print(f'\n>>>>Train Loss: {loss}')
+        print(f'>>>>Train epoch: {epoch}, Loss: {loss}')
         if epoch % save_model_freq == 0:
             rnn.save_model()
     
