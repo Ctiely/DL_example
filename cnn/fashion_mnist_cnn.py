@@ -3,6 +3,9 @@ import skimage
 import math
 import os
 import numpy as np
+import random
+
+from collections import defaultdict
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 
@@ -207,17 +210,31 @@ class CNNModel(object):
 
     
 if __name__ == '__main__':
+    num_class = 2000
     train_data = DataSet('data/train.txt')
     test_data = DataSet('data/test.txt')
-    total_updates = 100
+    
+    groups = defaultdict(list)
+    for i in range(len(train_data)):
+        groups[train_data.labels[i]].append(i)
+    
+    random.seed(0)
+    selected = []
+    for group in groups:
+        selected.extend(random.sample(groups[group], num_class))
+    
+    imgs = train_data.imgs[selected]
+    labels = train_data.imgs[selected]
+    
+    total_updates = 1000
     save_model_freq = 20
     
     cnn = CNNModel((28, 28, 1), 10)
     
-    for epoch in range(total_updates):
+    epoch = 0
+    while True:
         epoch += 1
-        loss, accuracy = cnn.update(train_data.imgs, train_data.labels,
-                          min(0.9, epoch / total_updates))
+        loss, accuracy = cnn.update(imgs, labels, min(0.9, epoch / total_updates))
         print(f'\n>>>>Traine poch: {epoch}, Loss: {loss}, Accuracy: {accuracy}')
         if epoch % save_model_freq == 0:
             cnn.save_model()

@@ -2,6 +2,7 @@ import tensorflow as tf
 import numpy as np
 import os
 import math
+import random
 
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
@@ -203,12 +204,17 @@ class RNNModel(object):
 
 
 if __name__ == "__main__":
-    total_updates = 100
-    save_model_freq = 20
+    total_updates = 10000
+    save_model_freq = 30
+    generate_freq = 15
     hidden_size = 128
     
     with open('data/poetry.txt', 'r') as f:
         texts = f.readlines()
+    
+    random.seed(0)
+    random.shuffle(texts)
+    texts = texts[: 20000]
     
     total_words = set()
     for text in texts:
@@ -224,13 +230,16 @@ if __name__ == "__main__":
     
     rnn = RNNModel(vocab_size, hidden_size)
     
-    for epoch in range(total_updates):
+    epoch = 0
+    while True:
         epoch += 1
         loss = rnn.update(dataset, data_lengths, words_idx,
                           min(0.9, epoch / total_updates))
         print(f'>>>>Train epoch: {epoch}, Loss: {loss}')
         if epoch % save_model_freq == 0:
             rnn.save_model()
-    
-    print(rnn.sample(10, [np.random.randint(vocab_size)], idx_words))
+        
+        if epoch % generate_freq == 0:
+            for _ in range(5):
+                print(rnn.sample(10, [np.random.randint(vocab_size)], idx_words))
 
