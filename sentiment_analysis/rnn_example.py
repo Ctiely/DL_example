@@ -33,7 +33,6 @@ def generator(dataset, target, data_lengths, batch_size, words_idx):
 
 class RNNModel(object):
     def __init__(self, num_class, vocab_size, hidden_size,
-                 keep_prob=0.5,
                  batch_size=64,
                  max_grad_norm=1.0,
                  embedding_size=100,
@@ -44,11 +43,12 @@ class RNNModel(object):
         self.hidden_size = hidden_size
         
         self.embedding_size = embedding_size
-        self.keep_prob = keep_prob
         self.max_grad_norm = max_grad_norm
         self.training_batchsize = batch_size
         self.lr_schedule = lr_schedule
         self.save_path = save_path
+        
+        self.training = None
         
         tf.reset_default_graph()
         tf.Variable(0, name="global_step", trainable=False)
@@ -62,7 +62,6 @@ class RNNModel(object):
     def _build_model(self):
         self.input_words = tf.placeholder(tf.int32, [None, None], name='inputs')
         self.lengths = tf.placeholder(tf.int32, [None], name='lengths')
-        self.keep_prob_hd = tf.placeholder(tf.float32)
         batch_size = tf.shape(self.input_words)[0]
         max_length = tf.shape(self.input_words)[1]
         with tf.device("/cpu:0"):
@@ -70,17 +69,13 @@ class RNNModel(object):
                     'embedding', [self.vocab_size, self.embedding_size])
             self.gru_inputs = tf.nn.embedding_lookup(embedding, self.input_words)
         
-        gru = tf.nn.rnn_cell.GRUCell(self.hidden_size)
-        dropout = tf.nn.rnn_cell.DropoutWrapper(gru, output_keep_prob=self.keep_prob_hd)
-        initial_state = dropout.zero_state(batch_size, tf.float32)
-        self.gru_outputs, _ = tf.nn.dynamic_rnn(
-                dropout, self.gru_inputs,
-                initial_state=initial_state,
-                sequence_length=self.lengths
-                )
+        gru = tf.contrib.cudnn_rnn.CudnnGRU(1, self.hidden_size)
+        self.gru_outputs, _ = gru(inputs=self.gru_inputs, training=self.training)
         indexs = tf.range(0, batch_size) * max_length + self.lengths - 1
-        outputs = tf.gather(tf.reshape(self.gru_outputs, [-1, self.hidden_size]),
-                            indexs)
+        outputs = tf.gather(
+                tf.reshape(self.gru_outputs, [-1, self.hidden_size]),
+                indexs
+                )
         self.outputs = tf.layers.dense(
                 outputs, self.num_class,
                 kernel_initializer=tf.truncated_normal_initializer(0.0, 0.01)
@@ -134,6 +129,7 @@ class RNNModel(object):
             print("## New start!")
     
     def update(self, dataset, target, data_lengths, words_idx, update_ratio):
+        self.training = True
         batch_datas = generator(
                 dataset, target, data_lengths, self.training_batchsize, words_idx
                 )
@@ -146,7 +142,6 @@ class RNNModel(object):
                 self.input_words: mini_words,
                 self.targets: mini_targets,
                 self.lengths: mini_lengths,
-                self.keep_prob_hd: self.keep_prob,
                 self.moved_lr: self.lr_schedule(update_ratio)
                 }
 
@@ -170,10 +165,10 @@ class RNNModel(object):
         return loss / step, accuracy / step
 
     def predict(self, batch_data, batch_length):
+        self.training = False
         preds = self.sess.run(self.preds,
                               feed_dict={self.input_words: batch_data,
-                                         self.lengths: batch_length,
-                                         self.keep_prob_hd: 1.0})
+                                         self.lengths: batch_length})
         return preds
 
 
